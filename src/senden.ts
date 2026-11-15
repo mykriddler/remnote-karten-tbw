@@ -181,6 +181,11 @@ export async function sendeJetzt(plugin: ReactRNPlugin, anlass: string): Promise
       letzterStatus = 'nicht eingerichtet (Adresse oder Token fehlt in den Plugin-Einstellungen)';
       return letzterStatus;
     }
+    // Token und Zahlen nur verschlüsselt übertragen
+    if (!/^https:\/\//i.test(url)) {
+      letzterStatus = 'nicht gesendet: Die Adresse muss mit https:// beginnen';
+      return letzterStatus;
+    }
     const z = await tageszahlen(plugin);
     letzterSendeversuch = Date.now();
     const r = await fetch(url, {
