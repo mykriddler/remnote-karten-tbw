@@ -83,6 +83,8 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
     // poolNeu: neuer Prüfungsstoff, noch nie gelernt; der Prüfungsplaner parkt diese Karten auf startDateForNewlyAddedCards
     poolNeu: 0,
     heuteNeu: 0, neuDieseWoche: 0, probleme: 0,
+    // aufholstapel: noch nie gelernt, laut Planer aber schon fällig (ohne den geparkten neuen Prüfungsstoff)
+    aufholstapel: 0,
     verlauf: {} as Record<string, number>, // Wiederholungen je Tag, letzte 30 Tage
     bewertungen: {} as Record<string, number>, // Antworten der letzten 30 Tage nach Bewertung (score)
     verlaufLang: {} as Record<string, number>, // wie verlauf, aber bis VERLAUF_TAGE zurück
@@ -94,7 +96,7 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
   };
   for (let i = 0; i <= PROGNOSE_TAGE; i++) z.prognose[datum(heute0 + i * TAG + TAG / 2)] = 0;
   for (let i = 0; i < ZUGANG_WOCHEN; i++) z.zugaenge[datum(zugangAb + i * 7 * TAG + TAG / 2)] = 0;
-  const jeRem = new Map<string, { cards: number; due: number; neu: number; learned: number }>();
+  const jeRem = new Map<string, Kennzahlen>();
   const ms = {} as Record<string, number>;
   const nachfahren: any[] = await ordner.getDescendants();
   for (const r of nachfahren) {
@@ -107,11 +109,21 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
       z.karten++;
       // Zahlen je Rem für den Dokumentenbaum (fällig ohne geparkten neuen Prüfungsstoff, wie RemNote)
       const geparkt = hist.length === 0 && startNeu != null && c.nextRepetitionTime === startNeu;
-      const e = jeRem.get(r._id) ?? { cards: 0, due: 0, neu: 0, learned: 0 };
+      const e = jeRem.get(r._id) ?? leereKennzahlen();
       e.cards++;
       if (hist.length === 0) e.neu++;
       else e.learned++;
       if (!geparkt && c.nextRepetitionTime != null && c.nextRepetitionTime < heuteEnde) e.due++;
+      if ((c.timesWrongInRow ?? 0) >= 2) e.struggling++;
+      if (hist.length === 0 && !geparkt && c.nextRepetitionTime != null && c.nextRepetitionTime < heuteEnde) z.aufholstapel++;
+      for (const h of hist) {
+        if (h.date < vor30) continue;
+        e.reviews30++;
+        if (h.score === 0) e.again++;
+        else if (h.score === 0.5) e.hard++;
+        else if (h.score === 1) e.good++;
+        else if (h.score === 1.5) e.easy++;
+      }
       jeRem.set(r._id, e);
       // Prognose: schon gelernte Karten nach ihrem nächsten Termin (Überfälliges zählt auf heute)
       if (hist.length > 0 && c.nextRepetitionTime != null && c.nextRepetitionTime < prognoseEnde) {
@@ -173,8 +185,15 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
 
 export type Dokument = {
   path: string[]; name: string; remId: string; cards: number; due: number; new: number; learned: number;
+  reviews30: number; struggling: number; again: number; hard: number; good: number; easy: number;
   tiefe: number; ordnung: number;
 };
+/** Kennzahlen je Rem bzw. Teilbaum; reviews30 und Bewertungen: Wiederholungen der letzten 30 Tage ohne Pauken. */
+type Kennzahlen = {
+  cards: number; due: number; neu: number; learned: number;
+  reviews30: number; struggling: number; again: number; hard: number; good: number; easy: number;
+};
+const leereKennzahlen = (): Kennzahlen => ({ cards: 0, due: 0, neu: 0, learned: 0, reviews30: 0, struggling: 0, again: 0, hard: 0, good: 0, easy: 0 });
 
 /**
  * Ordner und Dokumente unterhalb des Kursordners mit den Summen ihrer Karten (wie RemNotes Dokumentenstatistik).
@@ -182,13 +201,13 @@ export type Dokument = {
  */
 async function dokumentenbaum(plugin: ReactRNPlugin, ordner: any, nachfahren: any[], jeRem: Map<string, any>): Promise<Dokument[]> {
   const nachId = new Map<string, any>(nachfahren.map((r) => [r._id, r]));
-  const summe = new Map<string, { cards: number; due: number; neu: number; learned: number }>();
+  const summe = new Map<string, Kennzahlen>();
   for (const [id, e] of jeRem) {
     let x: any = nachId.get(id);
     let schritte = 0;
     while (x && schritte++ < 50) {
-      const s = summe.get(x._id) ?? { cards: 0, due: 0, neu: 0, learned: 0 };
-      s.cards += e.cards; s.due += e.due; s.neu += e.neu; s.learned += e.learned;
+      const s = summe.get(x._id) ?? leereKennzahlen();
+      for (const k of Object.keys(e) as (keyof Kennzahlen)[]) s[k] += e[k];
       summe.set(x._id, s);
       if (x.parent === ordner._id) break;
       x = nachId.get(x.parent);
@@ -205,7 +224,11 @@ async function dokumentenbaum(plugin: ReactRNPlugin, ordner: any, nachfahren: an
       if (!(await k.isFolder()) && !(await k.isDocument())) continue;
       if (!/^[A-Za-z0-9]{1,40}$/.test(k._id)) continue;
       const name = ((await klar(plugin, k.text)) || '(ohne Titel)').slice(0, 80);
-      aus.push({ path: pfad, name, remId: k._id, cards: s.cards, due: s.due, new: s.neu, learned: s.learned, tiefe, ordnung: ordnung++ });
+      aus.push({
+        path: pfad, name, remId: k._id, cards: s.cards, due: s.due, new: s.neu, learned: s.learned,
+        reviews30: s.reviews30, struggling: s.struggling, again: s.again, hard: s.hard, good: s.good, easy: s.easy,
+        tiefe, ordnung: ordnung++,
+      });
       if (pfad.length + 1 < MAX_TIEFE) await lauf(k, [...pfad, name], tiefe + 1);
     }
   };

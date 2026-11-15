@@ -4,10 +4,10 @@
 // Die Logik (was geschrieben wird) liegt im Werkzeug, nicht hier.
 import { declareIndexPlugin, type ReactRNPlugin, type RichTextInterface } from '@remnote/plugin-sdk';
 import { tageszahlen } from './tageszahlen';
-import { einrichten, beenden, sendeJetzt, status, nutzlast } from './senden';
+import { einrichten, beenden, sendeJetzt, status, nutzlast, langerVerlauf } from './senden';
 
 const BRUECKE = 'http://localhost:8080/bruecke';
-const VERSION = '0.3.0';
+const VERSION = '0.3.3';
 const POWERUPS = ['w', 'o', 'u', 'r', 'dv', 'f', 'id', 'n', 'pn', 'i', 'qt', 'cd', 'x'];
 
 let aktiv = true;
@@ -196,7 +196,7 @@ async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any
     case 'tageszahlen':
       return await tageszahlen(plugin);
     case 'syncVorschau':
-      return nutzlast(await tageszahlen(plugin));
+      return nutzlast(await tageszahlen(plugin), a?.langerVerlauf ?? (await langerVerlauf(plugin)));
     case 'syncJetzt':
       return await sendeJetzt(plugin, 'Ã¼ber die BrÃ¼cke');
     case 'syncStatus':

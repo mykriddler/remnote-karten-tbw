@@ -33,14 +33,15 @@ let timer: any = null;
  *   scheduledToday = due + heute gelernt, newCards = noch nie gelernte Karten.
  */
 export function bereiche(z: Awaited<ReturnType<typeof tageszahlen>>) {
-  const b: Record<string, { due: number; scheduledToday: number; reviewedToday: number; newCards: number }> = {};
+  const b: Record<string, { due: number; scheduledToday: number; reviewedToday: number; newCards: number; newLearnedToday?: number }> = {};
   if (z.tbw) {
     // „erledigt“ = heute gelernt und heute nicht noch einmal dran; so zählt RemNote „Karten übrig“ herunter
     // (gemessen 15.11.2026: Ziel 89, 7 Karten gelernt, 2 davon heute erneut dran → RemNote 84 übrig).
     const erledigt = z.tbw.erledigt;
     const zielPlan = z.tagesstart?.ziel ?? z.plan?.ziel ?? null;
     const ziel = zielPlan != null ? zielPlan : z.tbw.faellig + erledigt;
-    b.TBW = { due: Math.max(0, ziel - erledigt), scheduledToday: ziel, reviewedToday: erledigt, newCards: neuUebrig(z) };
+    // newLearnedToday: heute aus dem neuen Prüfungsstoff gelernt (Lernzentrale ab v0.5.14)
+    b.TBW = { due: Math.max(0, ziel - erledigt), scheduledToday: ziel, reviewedToday: erledigt, newCards: neuUebrig(z), newLearnedToday: neuGelerntHeute(z) };
   }
   if (z.studium) {
     const s = z.studium;
@@ -52,9 +53,10 @@ export function bereiche(z: Awaited<ReturnType<typeof tageszahlen>>) {
 const STREAK_ZIEL = 10; // wie RemNote („Übe heute 10 Karten“)
 /**
  * Langer Lernverlauf (bis 400 Tage) und Lernminuten in history: erst ab Lernzentrale v0.5.18.
- * Bis v0.5.17 verwirft der Server history mit mehr als 31 Tagen ganz; bis dahin bleiben es 30 Tage.
+ * Bis v0.5.17 verwirft der Server history mit mehr als 31 Tagen ganz; deshalb ein Schalter in den
+ * Plugin-Einstellungen (Standard aus), der nach dem Update der Lernzentrale umgelegt wird, ohne neue Plugin-Version.
  */
-const LANGER_VERLAUF = false;
+export const EINSTELLUNG_LANGER_VERLAUF = 'lz-langer-verlauf';
 const KURZ_TAGE = 30;
 const MAX_DOKUMENTE = 80;
 
@@ -139,6 +141,13 @@ export function dokumente(z: Z) {
     due: zahl(d.due),
     new: zahl(d.new),
     learned: zahl(d.learned),
+    // „wo muss ich mehr tun“: Arbeit und Antworten der letzten 30 Tage, schwierige Karten (2× oder öfter in Folge falsch)
+    reviews30: zahl(d.reviews30),
+    struggling: zahl(d.struggling),
+    again: zahl(d.again),
+    hard: zahl(d.hard),
+    good: zahl(d.good),
+    easy: zahl(d.easy),
   }));
 }
 
@@ -146,7 +155,7 @@ export function dokumente(z: Z) {
  * Auswertungen für die Seite „Lernstoff“: Lernverlauf mit Streak,
  * Antwortqualität und Fortschritt je Fach. Oben im Sync; ältere Lernzentralen verwerfen diese Felder still.
  */
-export function auswertung(z: Awaited<ReturnType<typeof tageszahlen>>) {
+export function auswertung(z: Awaited<ReturnType<typeof tageszahlen>>, LANGER_VERLAUF = false) {
   const bereiche: Record<string, any> = {};
   if (z.tbw) bereiche.TBW = z.tbw;
   if (z.studium) bereiche.WiING = z.studium;
@@ -207,7 +216,7 @@ function neuUebrig(z: Awaited<ReturnType<typeof tageszahlen>>) {
   return Math.max(0, Math.min(quote, z.tbw?.poolNeu ?? quote) - neuGelerntHeute(z));
 }
 
-export function nutzlast(z: Awaited<ReturnType<typeof tageszahlen>>) {
+export function nutzlast(z: Awaited<ReturnType<typeof tageszahlen>>, langerVerlauf = false) {
   const tage = Object.keys(z.faelligJeTag).sort().slice(0, 31);
   const courses = bereiche(z);
   const summe = (k: 'due' | 'scheduledToday' | 'reviewedToday') => Object.values(courses).reduce((a, c) => a + c[k], 0);
@@ -234,8 +243,10 @@ export function nutzlast(z: Awaited<ReturnType<typeof tageszahlen>>) {
     })),
   };
   if (z.naechsteFaelligkeit) body.nextDue = z.naechsteFaelligkeit;
-  Object.assign(body, auswertung(z), prognose(z), zugaenge(z));
+  Object.assign(body, auswertung(z, langerVerlauf), prognose(z), zugaenge(z));
   body.documents = dokumente(z);
+  // Aufholstapel des Prüfungsplaners (nur TBW; WiING hat keinen Prüfungsplaner, dort stecken nie gelernte fällige Karten schon in courses.WiING.due)
+  if (z.tbw) body.backlog = { TBW: zahl(z.tbw.aufholstapel), WiING: 0 };
   // Prüfungs-Countdown (ruhig, ohne Druck). Lokale Tage; die Resttage rechnet die Lernzentrale selbst.
   const p = z.plan;
   if (p?.pruefung && Array.isArray(p.zielSpanne)) {
@@ -294,7 +305,7 @@ export async function sendeJetzt(plugin: ReactRNPlugin, anlass: string): Promise
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Lernzentrale-Token': token },
-      body: JSON.stringify(nutzlast(z)),
+      body: JSON.stringify(nutzlast(z, await langerVerlauf(plugin))),
     });
     const antwort = (await r.text()).slice(0, 120);
     letzterStatus = `${new Date().toLocaleString('de-DE')}: ${anlass}, HTTP ${r.status} ${antwort}`;
@@ -315,6 +326,14 @@ export async function sendeJetzt(plugin: ReactRNPlugin, anlass: string): Promise
   }
 }
 
+export async function langerVerlauf(plugin: ReactRNPlugin) {
+  try {
+    return !!(await plugin.settings.getSetting<boolean>(EINSTELLUNG_LANGER_VERLAUF));
+  } catch (_) {
+    return false;
+  }
+}
+
 export function status() {
   return letzterStatus;
 }
@@ -331,6 +350,12 @@ export async function einrichten(plugin: ReactRNPlugin) {
     title: 'Lernzentrale: Zugangstoken',
     description: 'Token aus den Einstellungen des Servers; einmal hier eintragen, bleibt nur in RemNote gespeichert.',
     defaultValue: '',
+  });
+  await plugin.settings.registerBooleanSetting({
+    id: EINSTELLUNG_LANGER_VERLAUF,
+    title: 'Lernzentrale: langen Lernverlauf senden (400 Tage, Lernminuten)',
+    description: 'Erst einschalten, wenn die Lernzentrale Version 0.5.18 oder neuer hat; ältere Versionen verwerfen sonst den ganzen Lernverlauf.',
+    defaultValue: false,
   });
   await plugin.app.registerCommand({
     id: 'lz-sync-jetzt',
