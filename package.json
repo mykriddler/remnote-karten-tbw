@@ -1,0 +1,17 @@
+{
+  "private": true,
+  "name": "remnote-karten-plugin",
+  "version": "0.1.0",
+  "description": "RemNote-Plugin für das Projekt RemNote-Karten (Karten einzeln schreiben und zurücklesen)",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@remnote/plugin-sdk": "0.0.46",
+    "react": "17.0.2",
+    "react-dom": "17.0.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
