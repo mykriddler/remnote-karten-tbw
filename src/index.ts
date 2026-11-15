@@ -7,7 +7,7 @@ import { tageszahlen } from './tageszahlen';
 import { einrichten, beenden, sendeJetzt, status, nutzlast } from './senden';
 
 const BRUECKE = 'http://localhost:8080/bruecke';
-const VERSION = '0.2.9';
+const VERSION = '0.3.0';
 const POWERUPS = ['w', 'o', 'u', 'r', 'dv', 'f', 'id', 'n', 'pn', 'i', 'qt', 'cd', 'x'];
 
 let aktiv = true;
@@ -201,6 +201,10 @@ async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any
       return await sendeJetzt(plugin, 'Ã¼ber die BrÃ¼cke');
     case 'syncStatus':
       return status();
+    case 'neuLaden':
+      // Plugin-Rahmen neu laden (holt den frischen Bau von der Bruecke), damit nach einem Bau kein Umschalten von Hand noetig ist
+      setTimeout(() => (globalThis as any).location?.reload(), 200);
+      return true;
     case 'herkunft':
       // Adresse, unter der das Plugin lÃ¤uft (fÃ¼r die CORS-Freigabe der Lernzentrale)
       return { origin: (globalThis as any).location?.origin ?? null, href: (globalThis as any).location?.href ?? null, version: VERSION };

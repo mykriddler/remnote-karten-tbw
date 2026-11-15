@@ -50,6 +50,97 @@ export function bereiche(z: Awaited<ReturnType<typeof tageszahlen>>) {
 }
 
 const STREAK_ZIEL = 10; // wie RemNote („Übe heute 10 Karten“)
+/**
+ * Langer Lernverlauf (bis 400 Tage) und Lernminuten in history: erst ab Lernzentrale v0.5.18.
+ * Bis v0.5.17 verwirft der Server history mit mehr als 31 Tagen ganz; bis dahin bleiben es 30 Tage.
+ */
+const LANGER_VERLAUF = false;
+const KURZ_TAGE = 30;
+const MAX_DOKUMENTE = 80;
+
+type Z = Awaited<ReturnType<typeof tageszahlen>>;
+const zahl = (n: any) => Math.max(0, Math.min(100000, Math.round(Number(n) || 0)));
+function letzteTage(reihe: Record<string, number>, n: number) {
+  return Object.fromEntries(Object.entries(reihe).filter(([, v]) => v > 0).sort().slice(-n).map(([t, v]) => [t, zahl(v)]));
+}
+function montagVon(tag: string) {
+  const [j, m, d] = tag.split('-').map(Number);
+  const x = new Date(j, m - 1, d, 12);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  const n = (v: number) => String(v).padStart(2, '0');
+  return `${x.getFullYear()}-${n(x.getMonth() + 1)}-${n(x.getDate())}`;
+}
+
+/**
+ * Anstehende Karten heute + 30 Tage je Kurs: reviews aus den nächsten Terminen der schon gelernten Karten
+ * (Überfälliges zählt auf heute), new für TBW laut Prüfungsplaner (Tagesquote der Woche, solange der
+ * neue Prüfungsstoff reicht; heute = noch offene Quote). WiING: Der normale Planer gibt neue Karten nach
+ * einer Einstellung frei, die ein Plugin nicht lesen kann, daher new = 0.
+ */
+export function prognose(z: Z) {
+  const jeKurs: Record<string, Record<string, { reviews: number; new: number }>> = {};
+  if (z.tbw) {
+    const heuteNeu = neuUebrig(z);
+    let vorrat = Math.max(0, (z.tbw.poolNeu ?? 0) - heuteNeu);
+    const wochen: Record<string, number> = (z.plan as any)?.neuJeWoche ?? {};
+    const r: Record<string, { reviews: number; new: number }> = {};
+    Object.keys(z.tbw.prognose).sort().forEach((t, i) => {
+      let neu = heuteNeu;
+      if (i > 0) {
+        const quote = zahl(wochen[montagVon(t)] ?? 0);
+        neu = Math.min(quote, vorrat);
+        vorrat -= neu;
+      }
+      r[t] = { reviews: zahl(z.tbw!.prognose[t]), new: zahl(neu) };
+    });
+    jeKurs.TBW = r;
+  }
+  if (z.studium) {
+    jeKurs.WiING = Object.fromEntries(Object.keys(z.studium.prognose).sort().map((t) => [t, { reviews: zahl(z.studium!.prognose[t]), new: 0 }]));
+  }
+  const gesamt: Record<string, { reviews: number; new: number }> = {};
+  for (const r of Object.values(jeKurs))
+    for (const [t, v] of Object.entries(r)) {
+      const g = (gesamt[t] ??= { reviews: 0, new: 0 });
+      g.reviews = zahl(g.reviews + v.reviews);
+      g.new = zahl(g.new + v.new);
+    }
+  return { forecast: gesamt, forecastByCourse: jeKurs };
+}
+
+/** Hinzugefügte Karten je Woche (Montag), letzte 12 Wochen. */
+export function zugaenge(z: Z) {
+  const jeKurs: Record<string, Record<string, number>> = {};
+  if (z.tbw) jeKurs.TBW = Object.fromEntries(Object.entries(z.tbw.zugaenge).map(([t, v]) => [t, zahl(v)]));
+  if (z.studium) jeKurs.WiING = Object.fromEntries(Object.entries(z.studium.zugaenge).map(([t, v]) => [t, zahl(v)]));
+  const gesamt: Record<string, number> = {};
+  for (const r of Object.values(jeKurs)) for (const [t, v] of Object.entries(r)) gesamt[t] = zahl((gesamt[t] ?? 0) + v);
+  return { added: gesamt, addedByCourse: jeKurs };
+}
+
+/**
+ * Dokumentenbaum beider Kurse, höchstens 80 Einträge: zuerst die oberen Ebenen (Teile, Fächer), dann tiefer,
+ * ausgegeben in RemNote-Reihenfolge (TBW vor WiING).
+ */
+export function dokumente(z: Z) {
+  const alle: any[] = [];
+  const dazu = (kurs: string, b: any) => {
+    for (const d of b?.dokumente ?? []) alle.push({ kurs, d, nr: alle.length });
+  };
+  dazu('TBW', z.tbw);
+  dazu('WiING', z.studium);
+  const auswahl = [...alle].sort((a, b) => a.d.tiefe - b.d.tiefe || a.nr - b.nr).slice(0, MAX_DOKUMENTE).sort((a, b) => a.nr - b.nr);
+  return auswahl.map(({ kurs, d }) => ({
+    course: kurs,
+    path: d.path.slice(0, 4).map((p: string) => p.slice(0, 80)),
+    name: d.name.slice(0, 80),
+    remId: d.remId,
+    cards: zahl(d.cards),
+    due: zahl(d.due),
+    new: zahl(d.new),
+    learned: zahl(d.learned),
+  }));
+}
 
 /**
  * Auswertungen für die Seite „Lernstoff“: Lernverlauf mit Streak,
@@ -63,8 +154,8 @@ export function auswertung(z: Awaited<ReturnType<typeof tageszahlen>>) {
   const byCourse: Record<string, Record<string, number>> = {};
   const quality: Record<string, { again: number; hard: number; good: number; easy: number }> = {};
   for (const [kurs, b] of Object.entries(bereiche)) {
-    byCourse[kurs] = { ...b.verlauf };
-    for (const [t, n] of Object.entries(b.verlauf as Record<string, number>)) days[t] = (days[t] ?? 0) + n;
+    byCourse[kurs] = { ...(b.verlaufLang ?? b.verlauf) };
+    for (const [t, n] of Object.entries((b.verlaufLang ?? b.verlauf) as Record<string, number>)) days[t] = (days[t] ?? 0) + n;
     const q = { again: 0, hard: 0, good: 0, easy: 0 };
     for (const [s, n] of Object.entries(b.bewertungen as Record<string, number>)) {
       if (s === '0') q.again += n;
@@ -80,16 +171,27 @@ export function auswertung(z: Awaited<ReturnType<typeof tageszahlen>>) {
   d.setHours(12, 0, 0, 0);
   const key = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
   if ((days[key(d)] ?? 0) < STREAK_ZIEL) d.setDate(d.getDate() - 1);
-  while ((days[key(d)] ?? 0) >= STREAK_ZIEL && streak < 30) {
+  while ((days[key(d)] ?? 0) >= STREAK_ZIEL && streak < 400) {
     streak++;
     d.setDate(d.getDate() - 1);
   }
+  // Bis Lernzentrale v0.5.17 höchstens 30 Tage je Reihe; ab v0.5.18 (LANGER_VERLAUF) bis 400 Tage samt Lernminuten.
+  const n = LANGER_VERLAUF ? 400 : KURZ_TAGE;
+  const history: any = {
+    days: letzteTage(days, n),
+    byCourse: Object.fromEntries(Object.entries(byCourse).map(([k, r]) => [k, letzteTage(r, n)])),
+    streakDays: streak,
+    streakGoal: STREAK_ZIEL,
+    goals: Object.fromEntries(Object.entries(z.zielverlauf ?? {}).sort().slice(-30)),
+  };
+  if (LANGER_VERLAUF) {
+    const minuten: Record<string, number> = {};
+    for (const b of Object.values(bereiche))
+      for (const [t, m] of Object.entries((b.minuten ?? {}) as Record<string, number>)) minuten[t] = (minuten[t] ?? 0) + m;
+    if (Object.keys(minuten).length) history.minutes = letzteTage(minuten, 400);
+  }
   return {
-    // höchstens 30 Tage je Reihe (Bodygrenze der Lernzentrale)
-    history: {
-      days, byCourse, streakDays: streak, streakGoal: STREAK_ZIEL,
-      goals: Object.fromEntries(Object.entries(z.zielverlauf ?? {}).sort().slice(-30)),
-    },
+    history,
     quality: { periodDays: 30, ...quality },
     subjects: (z.faecher ?? []).slice(0, 30),
   };
@@ -132,7 +234,8 @@ export function nutzlast(z: Awaited<ReturnType<typeof tageszahlen>>) {
     })),
   };
   if (z.naechsteFaelligkeit) body.nextDue = z.naechsteFaelligkeit;
-  Object.assign(body, auswertung(z));
+  Object.assign(body, auswertung(z), prognose(z), zugaenge(z));
+  body.documents = dokumente(z);
   // Prüfungs-Countdown (ruhig, ohne Druck). Lokale Tage; die Resttage rechnet die Lernzentrale selbst.
   const p = z.plan;
   if (p?.pruefung && Array.isArray(p.zielSpanne)) {

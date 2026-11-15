@@ -8,6 +8,11 @@
 import type { ReactRNPlugin } from '@remnote/plugin-sdk';
 
 const TAG = 24 * 60 * 60 * 1000;
+export const VERLAUF_TAGE = 400; // Lernverlauf rückwärts (Heatmap der Lernzentrale)
+export const PROGNOSE_TAGE = 30; // anstehende Karten: heute + 30 Tage
+export const ZUGANG_WOCHEN = 12; // hinzugefügte Karten je Woche
+const MAX_TIEFE = 4; // Ebenen des Dokumentenbaums unterhalb des Kursordners
+const ANTWORT_MAX_MS = 2 * 60 * 1000; // eine Antwort zählt höchstens 2 Minuten (Pausen vor offener Karte nicht mitzählen)
 
 function tagesbeginn(t: number) {
   const d = new Date(t);
@@ -66,6 +71,9 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
   const heuteEnde = heute0 + TAG;
   const woche0 = montag(jetzt);
   const vor30 = heute0 - 29 * TAG;
+  const vorLang = heute0 - (VERLAUF_TAGE - 1) * TAG;
+  const prognoseEnde = heute0 + (PROGNOSE_TAGE + 1) * TAG;
+  const zugangAb = montag(jetzt) - (ZUGANG_WOCHEN - 1) * 7 * TAG;
   const ordner: any = await plugin.rem.findByName([name], null);
   if (!ordner) return null;
   const z = {
@@ -77,8 +85,19 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
     heuteNeu: 0, neuDieseWoche: 0, probleme: 0,
     verlauf: {} as Record<string, number>, // Wiederholungen je Tag, letzte 30 Tage
     bewertungen: {} as Record<string, number>, // Antworten der letzten 30 Tage nach Bewertung (score)
+    verlaufLang: {} as Record<string, number>, // wie verlauf, aber bis VERLAUF_TAGE zurück
+    minuten: {} as Record<string, number>, // Lernzeit je Tag in Minuten (aus den Antwortzeiten, gerundet)
+    antwortzeiten: { mit: 0, ohne: 0 }, // Prüfzahl: Wiederholungen mit bzw. ohne Antwortzeit (letzte VERLAUF_TAGE)
+    prognose: {} as Record<string, number>, // anstehende Wiederholungen je Tag, heute (samt überfälligen) bis +PROGNOSE_TAGE
+    zugaenge: {} as Record<string, number>, // hinzugefügte Karten je Woche (Schlüssel: Montag), letzte ZUGANG_WOCHEN Wochen
+    dokumente: [] as Dokument[], // Ordner und Dokumente unterhalb des Ordners mit ihren Kartensummen
   };
-  for (const r of await ordner.getDescendants()) {
+  for (let i = 0; i <= PROGNOSE_TAGE; i++) z.prognose[datum(heute0 + i * TAG + TAG / 2)] = 0;
+  for (let i = 0; i < ZUGANG_WOCHEN; i++) z.zugaenge[datum(zugangAb + i * 7 * TAG + TAG / 2)] = 0;
+  const jeRem = new Map<string, { cards: number; due: number; neu: number; learned: number }>();
+  const ms = {} as Record<string, number>;
+  const nachfahren: any[] = await ordner.getDescendants();
+  for (const r of nachfahren) {
     let karten: any[] = [];
     try {
       karten = await r.getCards();
@@ -86,6 +105,34 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
     for (const c of karten) {
       const hist: any[] = (c.repetitionHistory ?? []).filter((h: any) => !h.isCram);
       z.karten++;
+      // Zahlen je Rem für den Dokumentenbaum (fällig ohne geparkten neuen Prüfungsstoff, wie RemNote)
+      const geparkt = hist.length === 0 && startNeu != null && c.nextRepetitionTime === startNeu;
+      const e = jeRem.get(r._id) ?? { cards: 0, due: 0, neu: 0, learned: 0 };
+      e.cards++;
+      if (hist.length === 0) e.neu++;
+      else e.learned++;
+      if (!geparkt && c.nextRepetitionTime != null && c.nextRepetitionTime < heuteEnde) e.due++;
+      jeRem.set(r._id, e);
+      // Prognose: schon gelernte Karten nach ihrem nächsten Termin (Überfälliges zählt auf heute)
+      if (hist.length > 0 && c.nextRepetitionTime != null && c.nextRepetitionTime < prognoseEnde) {
+        const k = datum(Math.max(c.nextRepetitionTime, heute0));
+        if (k in z.prognose) z.prognose[k]++;
+      }
+      if (typeof c.createdAt === 'number' && c.createdAt >= zugangAb) {
+        const k = datum(montag(c.createdAt) + TAG / 2);
+        if (k in z.zugaenge) z.zugaenge[k]++;
+      }
+      const tageLang = new Set<string>();
+      for (const h of hist) {
+        if (h.date < vorLang) continue;
+        const t = datum(h.date);
+        tageLang.add(t);
+        if (typeof h.responseTime === 'number' && h.responseTime > 0) {
+          z.antwortzeiten.mit++;
+          ms[t] = (ms[t] ?? 0) + Math.min(h.responseTime, ANTWORT_MAX_MS);
+        } else z.antwortzeiten.ohne++;
+      }
+      for (const t of tageLang) z.verlaufLang[t] = (z.verlaufLang[t] ?? 0) + 1;
       if (hist.length === 0) z.neu++;
       if (c.nextRepetitionTime != null && c.nextRepetitionTime < heuteEnde) {
         z.faellig++;
@@ -114,7 +161,56 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
       if ((c.timesWrongInRow ?? 0) >= 2) z.probleme++;
     }
   }
+  for (const [t, m] of Object.entries(ms)) {
+    const min = Math.round(m / 60000);
+    if (min > 0) z.minuten[t] = Math.min(min, 100000);
+  }
+  try {
+    z.dokumente = await dokumentenbaum(plugin, ordner, nachfahren, jeRem);
+  } catch (_) {}
   return z;
+}
+
+export type Dokument = {
+  path: string[]; name: string; remId: string; cards: number; due: number; new: number; learned: number;
+  tiefe: number; ordnung: number;
+};
+
+/**
+ * Ordner und Dokumente unterhalb des Kursordners mit den Summen ihrer Karten (wie RemNotes Dokumentenstatistik).
+ * Nur Ordner/Dokumente mit mindestens einer Karte, höchstens MAX_TIEFE Ebenen, Reihenfolge wie in RemNote.
+ */
+async function dokumentenbaum(plugin: ReactRNPlugin, ordner: any, nachfahren: any[], jeRem: Map<string, any>): Promise<Dokument[]> {
+  const nachId = new Map<string, any>(nachfahren.map((r) => [r._id, r]));
+  const summe = new Map<string, { cards: number; due: number; neu: number; learned: number }>();
+  for (const [id, e] of jeRem) {
+    let x: any = nachId.get(id);
+    let schritte = 0;
+    while (x && schritte++ < 50) {
+      const s = summe.get(x._id) ?? { cards: 0, due: 0, neu: 0, learned: 0 };
+      s.cards += e.cards; s.due += e.due; s.neu += e.neu; s.learned += e.learned;
+      summe.set(x._id, s);
+      if (x.parent === ordner._id) break;
+      x = nachId.get(x.parent);
+    }
+  }
+  const aus: Dokument[] = [];
+  let ordnung = 0;
+  const lauf = async (eltern: any, pfad: string[], tiefe: number) => {
+    if (tiefe > MAX_TIEFE) return;
+    const kinder = ((eltern.children ?? []) as string[]).map((id) => nachId.get(id)).filter(Boolean);
+    for (const k of kinder) {
+      const s = summe.get(k._id);
+      if (!s || s.cards === 0 || !(k.children ?? []).length) continue;
+      if (!(await k.isFolder()) && !(await k.isDocument())) continue;
+      if (!/^[A-Za-z0-9]{1,40}$/.test(k._id)) continue;
+      const name = ((await klar(plugin, k.text)) || '(ohne Titel)').slice(0, 80);
+      aus.push({ path: pfad, name, remId: k._id, cards: s.cards, due: s.due, new: s.neu, learned: s.learned, tiefe, ordnung: ordnung++ });
+      if (pfad.length + 1 < MAX_TIEFE) await lauf(k, [...pfad, name], tiefe + 1);
+    }
+  };
+  await lauf(ordner, [], 1);
+  return aus;
 }
 
 /**
@@ -146,6 +242,7 @@ export async function pruefungsplan(plugin: ReactRNPlugin, remId: string, jetzt 
     return {
       ziel, neuWoche, aufholen, startNeu,
       pruefung: cfg.examDate ?? null,
+      neuJeWoche: (cfg.learningPlan?.cardsPerWeek ?? {}) as Record<string, number>,
       aufholenBis: ch?.untilDateString ? datum(Date.parse(ch.untilDateString)) : null,
       zielSpanne: aufholen ? [ch.dailyGoalMin, ch.dailyGoalMax] : [cfg.dailyGoalRangeMin, cfg.dailyGoalRangeMax],
     };
