@@ -4,6 +4,7 @@ Kleines RemNote-Plugin für Lernkarten unterhalb eines Ordners „TBW“.
 
 - Schreibt und liest Lernkarten unterhalb von „TBW“ im Auftrag eines lokalen Kartenwerkzeugs. Das passiert nur, wenn dessen Brücke auf diesem Rechner unter localhost:8080 läuft; sonst ruht dieser Teil.
 - Zählt fällige, neue und gelernte Karten je Ordner und Dokument, dazu Lernstatistik (Wiederholungen je Tag, Lernminuten aus den Antwortzeiten, Antworten nach Bewertung, anstehende Karten der nächsten 30 Tage, hinzugefügte Karten je Woche). Die Zahlen gehen an einen eigenen Server, sobald Adresse und Zugangstoken in den Plugin-Einstellungen eingetragen sind. Gesendet wird beim Start, nach jeder Abfrage, alle 15 Minuten oder über den Befehl „Lernzentrale: Lernkarten-Zahlen jetzt senden“.
+- Läuft auch auf iPhone, iPad und Android, dort nur zum Zählen und Senden; der Kartenwerkzeug-Teil (localhost) ist auf Mobilgeräten abgeschaltet. Startwert und Zielverlauf des Tages liegen im synchronisierten Plugin-Speicher, damit alle Geräte denselben Bezug haben.
 
 Berechtigung: Rems unterhalb von „TBW“ (lesen und schreiben) und unterhalb von „Studium“ (nur lesen, nur zum Zählen). Adresse und Token stehen nie im Quelltext. Der Schalter „langen Lernverlauf senden“ erweitert den Verlauf von 30 auf 400 Tage (Standard aus).
 

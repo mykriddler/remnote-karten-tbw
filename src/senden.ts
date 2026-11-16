@@ -247,6 +247,10 @@ export function nutzlast(z: Awaited<ReturnType<typeof tageszahlen>>, langerVerla
   body.documents = dokumente(z);
   // Aufholstapel des Prüfungsplaners (nur TBW; WiING hat keinen Prüfungsplaner, dort stecken nie gelernte fällige Karten schon in courses.WiING.due)
   if (z.tbw) body.backlog = { TBW: zahl(z.tbw.aufholstapel), WiING: 0 };
+  // Datenstand: jüngste Wiederholung über beide Kurse. Senden zwei Geräte (Rechner, iPhone), erkennt die Lernzentrale
+  // daran ein Gerät, das die Wiederholungen des anderen noch nicht abgeglichen hat (älterer Stand), und behält den neueren.
+  const letzte = Math.max(z.tbw?.letzteWiederholung ?? 0, z.studium?.letzteWiederholung ?? 0);
+  if (letzte > 0) body.lastReviewAt = new Date(letzte).toISOString();
   // Prüfungs-Countdown (ruhig, ohne Druck). Lokale Tage; die Resttage rechnet die Lernzentrale selbst.
   const p = z.plan;
   if (p?.pruefung && Array.isArray(p.zielSpanne)) {

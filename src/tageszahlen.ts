@@ -85,6 +85,8 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
     heuteNeu: 0, neuDieseWoche: 0, probleme: 0,
     // aufholstapel: noch nie gelernt, laut Planer aber schon fällig (ohne den geparkten neuen Prüfungsstoff)
     aufholstapel: 0,
+    // Zeitpunkt der jüngsten Wiederholung in diesem Ordner (ms); zeigt, wie aktuell der Datenstand des Geräts ist
+    letzteWiederholung: 0,
     verlauf: {} as Record<string, number>, // Wiederholungen je Tag, letzte 30 Tage
     bewertungen: {} as Record<string, number>, // Antworten der letzten 30 Tage nach Bewertung (score)
     verlaufLang: {} as Record<string, number>, // wie verlauf, aber bis VERLAUF_TAGE zurück
@@ -117,6 +119,7 @@ export async function ordnerZahlen(plugin: ReactRNPlugin, name: string, jetzt = 
       if ((c.timesWrongInRow ?? 0) >= 2) e.struggling++;
       if (hist.length === 0 && !geparkt && c.nextRepetitionTime != null && c.nextRepetitionTime < heuteEnde) z.aufholstapel++;
       for (const h of hist) {
+        if (h.date > z.letzteWiederholung) z.letzteWiederholung = h.date;
         if (h.date < vor30) continue;
         e.reviews30++;
         if (h.score === 0) e.again++;
@@ -213,14 +216,31 @@ async function dokumentenbaum(plugin: ReactRNPlugin, ordner: any, nachfahren: an
       x = nachId.get(x.parent);
     }
   }
+  // Kinder aus den parent-Verweisen der Nachfahren ableiten: rem.children ist nach einem frischen Start oft leer,
+  // solange RemNote ein Dokument nicht geöffnet hat (gemessen 16.11.2026: 9 statt 29 Einträge).
+  // Reihenfolge nach children des Elternteils, soweit bekannt, sonst in der Reihenfolge von getDescendants.
+  const kinderVon = new Map<string, any[]>();
+  const nr = new Map<string, number>();
+  nachfahren.forEach((r, i) => {
+    nr.set(r._id, i);
+    if (!r.parent) return;
+    const l = kinderVon.get(r.parent) ?? [];
+    l.push(r);
+    kinderVon.set(r.parent, l);
+  });
   const aus: Dokument[] = [];
   let ordnung = 0;
   const lauf = async (eltern: any, pfad: string[], tiefe: number) => {
     if (tiefe > MAX_TIEFE) return;
-    const kinder = ((eltern.children ?? []) as string[]).map((id) => nachId.get(id)).filter(Boolean);
+    const reihe: string[] = eltern.children ?? [];
+    const pos = (r: any) => {
+      const p = reihe.indexOf(r._id);
+      return p >= 0 ? p : reihe.length + (nr.get(r._id) ?? 0);
+    };
+    const kinder = [...(kinderVon.get(eltern._id) ?? [])].sort((a, b) => pos(a) - pos(b));
     for (const k of kinder) {
       const s = summe.get(k._id);
-      if (!s || s.cards === 0 || !(k.children ?? []).length) continue;
+      if (!s || s.cards === 0 || !kinderVon.has(k._id)) continue;
       if (!(await k.isFolder()) && !(await k.isDocument())) continue;
       if (!/^[A-Za-z0-9]{1,40}$/.test(k._id)) continue;
       const name = ((await klar(plugin, k.text)) || '(ohne Titel)').slice(0, 80);
@@ -310,6 +330,14 @@ export async function fachZahlen(plugin: ReactRNPlugin, ordnerName: string, jetz
   return faecher;
 }
 
+/** In beide Speicher schreiben: synced für alle Geräte, local als Rückfall, falls synced nicht verfügbar ist. */
+async function schreibe(plugin: ReactRNPlugin, schluessel: string, wert: any) {
+  try {
+    await plugin.storage.setSynced(schluessel, wert);
+  } catch (_) {}
+  await plugin.storage.setLocal(schluessel, wert);
+}
+
 export async function tageszahlen(plugin: ReactRNPlugin, jetzt = Date.now()) {
   const heute0 = tagesbeginn(jetzt);
   const heuteEnde = heute0 + TAG;
@@ -348,13 +376,22 @@ export async function tageszahlen(plugin: ReactRNPlugin, jetzt = Date.now()) {
   const tbw = await ordnerZahlen(plugin, 'TBW', jetzt, plan?.startNeu ?? null);
   // Startwerte des Tages festhalten (Startwert je Tag, damit der Fortschrittsbalken einen festen Bezug hat).
   // Ziel und Pool des neuen Stoffs gelten ab dem ersten Zählen des Tages unverändert.
+  // Seit 0.3.4 im geräteübergreifenden Speicher (synced): Das erste Gerät des Tages (Rechner, iPhone, iPad)
+  // legt den Startwert fest, alle anderen übernehmen ihn. Ältere Werte aus dem Gerätespeicher werden übernommen.
   let tagesstart: any = null;
   try {
     const heute = datum(jetzt);
-    tagesstart = await plugin.storage.getLocal('tagesstart');
-    if (!tagesstart || tagesstart.datum !== heute) {
-      tagesstart = { datum: heute, ziel: plan?.ziel ?? null, poolNeu: tbw?.poolNeu ?? 0, neuQuote: plan?.neuWoche ?? 0 };
-      await plugin.storage.setLocal('tagesstart', tagesstart);
+    let synchron: any = null;
+    try {
+      synchron = await plugin.storage.getSynced('tagesstart');
+    } catch (_) {}
+    if (synchron?.datum === heute) tagesstart = synchron;
+    else {
+      const lokal: any = await plugin.storage.getLocal('tagesstart');
+      tagesstart = lokal?.datum === heute
+        ? lokal // heute schon auf diesem Gerät festgehalten (vor 0.3.4): an die anderen Geräte weitergeben
+        : { datum: heute, ziel: plan?.ziel ?? null, poolNeu: tbw?.poolNeu ?? 0, neuQuote: plan?.neuWoche ?? 0 };
+      await schreibe(plugin, 'tagesstart', tagesstart);
     }
   } catch (_) {}
   let studium = null;
@@ -362,13 +399,24 @@ export async function tageszahlen(plugin: ReactRNPlugin, jetzt = Date.now()) {
     studium = await ordnerZahlen(plugin, 'Studium', jetzt); // nur lesend (Berechtigung Read)
   } catch (_) {}
   // Tagesziel-Verlauf: je Tag Ziel und erledigt festhalten (ab 16.11.2026; ältere Tage kennt das Plugin nicht).
+  // Geräteübergreifend wie tagesstart. done je Tag ist der höchste Stand, den ein Gerät gesehen hat
+  // (ein Gerät, das die Wiederholungen eines anderen noch nicht abgeglichen hat, setzt den Wert nicht zurück).
   let zielverlauf: Record<string, { goal: number; done: number }> = {};
   try {
-    zielverlauf = ((await plugin.storage.getLocal('zielverlauf')) as any) ?? {};
-    if (tagesstart?.ziel != null && tbw) zielverlauf[datum(jetzt)] = { goal: tagesstart.ziel, done: tbw.erledigt };
+    let synchron: any = {};
+    try {
+      synchron = (await plugin.storage.getSynced('zielverlauf')) ?? {};
+    } catch (_) {}
+    const lokal = ((await plugin.storage.getLocal('zielverlauf')) as any) ?? {};
+    zielverlauf = { ...lokal, ...synchron };
+    const heute = datum(jetzt);
+    if (tagesstart?.ziel != null && tbw) {
+      const bisher = zielverlauf[heute]?.done ?? 0;
+      zielverlauf[heute] = { goal: tagesstart.ziel, done: Math.max(bisher, tbw.erledigt) };
+    }
     const tage = Object.keys(zielverlauf).sort();
     for (const t of tage.slice(0, Math.max(0, tage.length - 60))) delete zielverlauf[t];
-    await plugin.storage.setLocal('zielverlauf', zielverlauf);
+    await schreibe(plugin, 'zielverlauf', zielverlauf);
   } catch (_) {}
   let faecher: any[] = [];
   try {

@@ -1,13 +1,13 @@
-// RemNote-Karten: Plugin als schlanker AusfÃ¼hrer.
-// Holt AuftrÃ¤ge von der lokalen BrÃ¼cke (nur 127.0.0.1, nur wÃ¤hrend eines Laufs aktiv),
-// fÃ¼hrt sie Ã¼ber die offizielle Plugin-Schnittstelle aus und meldet das Ergebnis zurÃ¼ck.
+// RemNote-Karten: Plugin als schlanker Ausführer.
+// Holt Aufträge von der lokalen Brücke (nur 127.0.0.1, nur während eines Laufs aktiv),
+// führt sie über die offizielle Plugin-Schnittstelle aus und meldet das Ergebnis zurück.
 // Die Logik (was geschrieben wird) liegt im Werkzeug, nicht hier.
 import { declareIndexPlugin, type ReactRNPlugin, type RichTextInterface } from '@remnote/plugin-sdk';
 import { tageszahlen } from './tageszahlen';
 import { einrichten, beenden, sendeJetzt, status, nutzlast, langerVerlauf } from './senden';
 
 const BRUECKE = 'http://localhost:8080/bruecke';
-const VERSION = '0.3.3';
+const VERSION = '0.3.4';
 const POWERUPS = ['w', 'o', 'u', 'r', 'dv', 'f', 'id', 'n', 'pn', 'i', 'qt', 'cd', 'x'];
 
 let aktiv = true;
@@ -83,7 +83,7 @@ async function remDaten(plugin: ReactRNPlugin, rem: any, tiefe: number, mitKarte
 
 async function holeRem(plugin: ReactRNPlugin, id: string) {
   const rem = await plugin.rem.findOne(id);
-  if (!rem) throw new Error('Rem nicht gefunden oder auÃŸerhalb der Berechtigung: ' + id);
+  if (!rem) throw new Error('Rem nicht gefunden oder außerhalb der Berechtigung: ' + id);
   return rem;
 }
 
@@ -94,7 +94,7 @@ function rt(text: string): RichTextInterface {
 async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any> {
   switch (op) {
     case 'ping':
-      return { version: VERSION, zeit: Date.now() };
+      return { version: VERSION, zeit: Date.now(), mobil: await aufMobilgeraet(plugin) };
     case 'findeOben': {
       const rem = await plugin.rem.findByName(rt(a.name), null);
       return rem ? rem._id : null;
@@ -160,7 +160,7 @@ async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any
       return true;
     }
     case 'eigenschaften': {
-      // Powerups, Slots und Tags eines Rems lesen (etwa die LernprioritÃ¤t am Dokument)
+      // Powerups, Slots und Tags eines Rems lesen (etwa die Lernpriorität am Dokument)
       const rem: any = await holeRem(plugin, a.id);
       const codes: string[] = a.codes ?? [];
       const erg: any = { powerups: {}, tags: [] };
@@ -186,7 +186,7 @@ async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any
       return erg;
     }
     case 'fensterUrl':
-      // aktuelle Adresse der RemNote-OberflÃ¤che (fÃ¼r Sprunglinks)
+      // aktuelle Adresse der RemNote-Oberfläche (für Sprunglinks)
       return await plugin.window.getURL();
     case 'oeffne': {
       const rem = await holeRem(plugin, a.id);
@@ -198,7 +198,7 @@ async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any
     case 'syncVorschau':
       return nutzlast(await tageszahlen(plugin), a?.langerVerlauf ?? (await langerVerlauf(plugin)));
     case 'syncJetzt':
-      return await sendeJetzt(plugin, 'Ã¼ber die BrÃ¼cke');
+      return await sendeJetzt(plugin, 'über die Brücke');
     case 'syncStatus':
       return status();
     case 'neuLaden':
@@ -206,12 +206,12 @@ async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any
       setTimeout(() => (globalThis as any).location?.reload(), 200);
       return true;
     case 'herkunft':
-      // Adresse, unter der das Plugin lÃ¤uft (fÃ¼r die CORS-Freigabe der Lernzentrale)
+      // Adresse, unter der das Plugin läuft (für die CORS-Freigabe der Lernzentrale)
       return { origin: (globalThis as any).location?.origin ?? null, href: (globalThis as any).location?.href ?? null, version: VERSION };
     case 'wissensbasis':
       return await plugin.kb.getCurrentKnowledgeBaseData();
     case 'setzeEigenschaft': {
-      // Powerup hinzufÃ¼gen und einen Slot setzen (Wert als Klartext)
+      // Powerup hinzufügen und einen Slot setzen (Wert als Klartext)
       const rem: any = await holeRem(plugin, a.id);
       if (!(await rem.hasPowerup(a.code))) await rem.addPowerup(a.code);
       if (a.slot) await rem.setPowerupProperty(a.code, a.slot, rt(a.wert));
@@ -228,7 +228,7 @@ async function schleife(plugin: ReactRNPlugin) {
     try {
       const r = await fetch(BRUECKE + '/naechster', { cache: 'no-store' });
       fehlversuche = 0;
-      if (r.status === 204) continue; // nichts zu tun, sofort neu fragen (BrÃ¼cke hÃ¤lt die Anfrage offen)
+      if (r.status === 204) continue; // nichts zu tun, sofort neu fragen (Brücke hält die Anfrage offen)
       if (!r.ok) {
         await warte(3000);
         continue;
@@ -249,19 +249,30 @@ async function schleife(plugin: ReactRNPlugin) {
         body: JSON.stringify({ id: auftrag.id, ergebnisse }),
       });
     } catch (_) {
-      // BrÃ¼cke lÃ¤uft nicht: ruhig warten, langsam seltener fragen.
+      // Brücke läuft nicht: ruhig warten, langsam seltener fragen.
       fehlversuche++;
       await warte(Math.min(60000, 3000 * fehlversuche));
     }
   }
 }
 
+/** iPhone, iPad und Android: dort gibt es keine Brücke, das Plugin sendet nur die Tageszahlen. */
+async function aufMobilgeraet(plugin: ReactRNPlugin) {
+  try {
+    const os = await plugin.app.getOperatingSystem();
+    return os === 'ios' || os === 'android';
+  } catch (_) {
+    return false;
+  }
+}
+
 async function onActivate(plugin: ReactRNPlugin) {
   aktiv = true;
-  // Tageszahlen an die Lernzentrale (Einstellungen, Befehl, AuslÃ¶ser)
+  // Tageszahlen an die Lernzentrale (Einstellungen, Befehl, Auslöser), auf allen Geräten
   await einrichten(plugin);
-  // Kartenwerkzeug: AuftrÃ¤ge der lokalen BrÃ¼cke (nur aktiv, wenn die BrÃ¼cke lÃ¤uft)
-  schleife(plugin);
+  // Kartenwerkzeug: Aufträge der lokalen Brücke (nur am Rechner; dort nur aktiv, wenn die Brücke läuft).
+  // Auf Mobilgeräten gar nicht erst nach der Brücke fragen (spart Akku und Netz).
+  if (!(await aufMobilgeraet(plugin))) schleife(plugin);
 }
 
 async function onDeactivate(_: ReactRNPlugin) {

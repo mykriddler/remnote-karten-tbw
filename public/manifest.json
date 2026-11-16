@@ -4,10 +4,10 @@
   "name": "RemNote-Karten TBW",
   "author": "RemNote-Karten",
   "repoUrl": "https://github.com/mykriddler/remnote-karten-tbw",
-  "version": { "major": 0, "minor": 3, "patch": 3 },
+  "version": { "major": 0, "minor": 3, "patch": 4 },
   "unlisted": true,
   "theme": [],
-  "enableOnMobile": false,
+  "enableOnMobile": true,
   "description": "Schreibt und liest Lernkarten unterhalb von TBW, gesteuert vom lokalen Werkzeug.",
   "requestNative": false,
   "requiredScopes": [
