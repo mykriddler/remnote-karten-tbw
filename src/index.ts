@@ -4,11 +4,10 @@
 // Die Logik (was geschrieben wird) liegt im Werkzeug, nicht hier.
 import { declareIndexPlugin, type ReactRNPlugin, type RichTextInterface } from '@remnote/plugin-sdk';
 import { tageszahlen } from './tageszahlen';
-import { einrichten, beenden, sendeJetzt, status, nutzlast, langerVerlauf, sendenAbwarten } from './senden';
-import { oeffneAbfrage, sprungNachStart, sprungStatus, sprungTestBefehl, adressbeobachter } from './sprung';
+import { einrichten, beenden, sendeJetzt, status, nutzlast, langerVerlauf } from './senden';
 
 const BRUECKE = 'http://localhost:8080/bruecke';
-const VERSION = '0.3.7';
+const VERSION = '0.3.8';
 const POWERUPS = ['w', 'o', 'u', 'r', 'dv', 'f', 'id', 'n', 'pn', 'i', 'qt', 'cd', 'x'];
 
 let aktiv = true;
@@ -204,21 +203,6 @@ async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any
       return status();
     case 'url':
       return await plugin.window.getURL();
-    case 'abfrageOeffnen':
-      // Test des Sprungs am Rechner: dieselbe Funktion wie nach dem Kaltstart am Handy
-      return await oeffneAbfrage(plugin, String(a?.ziel ?? '/flashcards'));
-    case 'sprungStatus':
-      return sprungStatus();
-    case 'sprungJetzt':
-      // Ende-zu-Ende-Test am Rechner: gemerkten Sprung bei der Lernzentrale abholen und ausführen (wie nach dem Kaltstart am Handy)
-      await sprungNachStart(plugin, 'Rechner über Brücke');
-      return sprungStatus();
-    case 'sprungDiagnose':
-      // Ablauf des letzten Sprungs, auch vom Handy (synchronisierter Speicher)
-      return await plugin.storage.getSynced('sprungDiagnose');
-    case 'urlVerlauf':
-      // Adresswechsel der mobilen App nach dem Start (0.3.7)
-      return await plugin.storage.getSynced('urlVerlauf');
     case 'neuLaden':
       // Plugin-Rahmen neu laden (holt den frischen Bau von der Bruecke), damit nach einem Bau kein Umschalten von Hand noetig ist
       setTimeout(() => (globalThis as any).location?.reload(), 200);
@@ -290,21 +274,9 @@ async function onActivate(plugin: ReactRNPlugin) {
   await einrichten(plugin);
   // Kartenwerkzeug: Aufträge der lokalen Brücke (nur am Rechner; dort nur aktiv, wenn die Brücke läuft).
   // Auf Mobilgeräten gar nicht erst nach der Brücke fragen (spart Akku und Netz).
-  // Auf dem Handy statt dessen: einen in der Lernzentrale gemerkten Sprung in die Abfrage ausführen
-  // (die RemNote-App verwirft den Link, wenn sie durch ihn erst startet).
-  // Das Senden der Zahlen wartet, bis der Sprung erledigt ist.
-  if (await aufMobilgeraet(plugin)) {
-    sendenAbwarten(sprungNachStart(plugin, 'Handy'));
-    adressbeobachter(plugin); // Diagnose: Adressen der mobilen App festhalten (0.3.7)
-  } else schleife(plugin);
-  // Test von Hand auf jedem Gerät: Befehlssuche, „Lernzentrale: Sprung in die Abfrage testen“
-  await plugin.app.registerCommand({
-    id: 'lz-sprung-test',
-    name: 'Lernzentrale: Sprung in die Abfrage testen',
-    action: async () => {
-      await plugin.app.toast('Lernzentrale: ' + (await sprungTestBefehl(plugin)));
-    },
-  });
+  // (0.3.5 bis 0.3.7 versuchten hier am Handy einen Sprung in die Abfrage nach dem Kaltstart; auf iOS folgen die
+  // Bildschirme der App setURL nicht, deshalb in 0.3.8 wieder entfernt.)
+  if (!(await aufMobilgeraet(plugin))) schleife(plugin);
 }
 
 async function onDeactivate(_: ReactRNPlugin) {
