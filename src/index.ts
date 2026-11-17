@@ -5,10 +5,10 @@
 import { declareIndexPlugin, type ReactRNPlugin, type RichTextInterface } from '@remnote/plugin-sdk';
 import { tageszahlen } from './tageszahlen';
 import { einrichten, beenden, sendeJetzt, status, nutzlast, langerVerlauf, sendenAbwarten } from './senden';
-import { oeffneAbfrage, sprungNachStart, sprungStatus, sprungTestBefehl } from './sprung';
+import { oeffneAbfrage, sprungNachStart, sprungStatus, sprungTestBefehl, adressbeobachter } from './sprung';
 
 const BRUECKE = 'http://localhost:8080/bruecke';
-const VERSION = '0.3.6';
+const VERSION = '0.3.7';
 const POWERUPS = ['w', 'o', 'u', 'r', 'dv', 'f', 'id', 'n', 'pn', 'i', 'qt', 'cd', 'x'];
 
 let aktiv = true;
@@ -216,6 +216,9 @@ async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any
     case 'sprungDiagnose':
       // Ablauf des letzten Sprungs, auch vom Handy (synchronisierter Speicher)
       return await plugin.storage.getSynced('sprungDiagnose');
+    case 'urlVerlauf':
+      // Adresswechsel der mobilen App nach dem Start (0.3.7)
+      return await plugin.storage.getSynced('urlVerlauf');
     case 'neuLaden':
       // Plugin-Rahmen neu laden (holt den frischen Bau von der Bruecke), damit nach einem Bau kein Umschalten von Hand noetig ist
       setTimeout(() => (globalThis as any).location?.reload(), 200);
@@ -290,8 +293,10 @@ async function onActivate(plugin: ReactRNPlugin) {
   // Auf dem Handy statt dessen: einen in der Lernzentrale gemerkten Sprung in die Abfrage ausführen
   // (die RemNote-App verwirft den Link, wenn sie durch ihn erst startet).
   // Das Senden der Zahlen wartet, bis der Sprung erledigt ist.
-  if (await aufMobilgeraet(plugin)) sendenAbwarten(sprungNachStart(plugin, 'Handy'));
-  else schleife(plugin);
+  if (await aufMobilgeraet(plugin)) {
+    sendenAbwarten(sprungNachStart(plugin, 'Handy'));
+    adressbeobachter(plugin); // Diagnose: Adressen der mobilen App festhalten (0.3.7)
+  } else schleife(plugin);
   // Test von Hand auf jedem Gerät: Befehlssuche, „Lernzentrale: Sprung in die Abfrage testen“
   await plugin.app.registerCommand({
     id: 'lz-sprung-test',

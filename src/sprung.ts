@@ -156,6 +156,34 @@ export async function sprungNachStart(plugin: ReactRNPlugin, geraet = '') {
   }
 }
 
+/**
+ * Adressbeobachter (0.3.7, nur Diagnose am Handy): In 0.3.6 meldete getURL nach setURL('/flashcards') stabil
+ * /flashcards, der Bildschirm blieb aber auf der Startseite (vorher /mobile_home). Die mobile App hat also eigene
+ * Adressen. Der Beobachter hält nach dem Start einige Minuten lang jeden Adresswechsel fest (synchronisierter
+ * Speicher 'urlVerlauf'), damit sichtbar wird, unter welcher Adresse die Abfrage am Handy läuft.
+ */
+export async function adressbeobachter(plugin: ReactRNPlugin, dauerMs = 4 * 60 * 1000, abstandMs = 1000) {
+  const start = Date.now();
+  const verlauf: { start: number; wechsel: [number, string][] } = { start, wechsel: [] };
+  let zuletzt = '';
+  let gesichert = 0;
+  while (Date.now() - start < dauerMs) {
+    const a = await adresse(plugin);
+    if (a !== zuletzt) {
+      zuletzt = a;
+      verlauf.wechsel.push([Date.now() - start, a.slice(0, 200)]);
+      if (verlauf.wechsel.length > 80) verlauf.wechsel.splice(1, 1);
+    }
+    if (verlauf.wechsel.length !== gesichert) {
+      gesichert = verlauf.wechsel.length;
+      try {
+        await plugin.storage.setSynced('urlVerlauf', verlauf);
+      } catch (_) {}
+    }
+    await new Promise((r) => setTimeout(r, abstandMs));
+  }
+}
+
 /** Befehl zum Testen von Hand (auch am Handy über die Befehlssuche): springt in die Tagesabfrage. */
 export async function sprungTestBefehl(plugin: ReactRNPlugin) {
   protokoll = { start: Date.now(), geraet: 'Befehl', schritte: [] };
