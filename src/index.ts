@@ -5,9 +5,10 @@
 import { declareIndexPlugin, type ReactRNPlugin, type RichTextInterface } from '@remnote/plugin-sdk';
 import { tageszahlen } from './tageszahlen';
 import { einrichten, beenden, sendeJetzt, status, nutzlast, langerVerlauf } from './senden';
+import { oeffneAbfrage, sprungNachStart, sprungStatus } from './sprung';
 
 const BRUECKE = 'http://localhost:8080/bruecke';
-const VERSION = '0.3.4';
+const VERSION = '0.3.5';
 const POWERUPS = ['w', 'o', 'u', 'r', 'dv', 'f', 'id', 'n', 'pn', 'i', 'qt', 'cd', 'x'];
 
 let aktiv = true;
@@ -201,6 +202,17 @@ async function fuehreAus(plugin: ReactRNPlugin, op: string, a: any): Promise<any
       return await sendeJetzt(plugin, 'über die Brücke');
     case 'syncStatus':
       return status();
+    case 'url':
+      return await plugin.window.getURL();
+    case 'abfrageOeffnen':
+      // Test des Sprungs am Rechner: dieselbe Funktion wie nach dem Kaltstart am Handy
+      return await oeffneAbfrage(plugin, String(a?.ziel ?? '/flashcards'));
+    case 'sprungStatus':
+      return sprungStatus();
+    case 'sprungJetzt':
+      // Ende-zu-Ende-Test am Rechner: gemerkten Sprung bei der Lernzentrale abholen und ausführen (wie nach dem Kaltstart am Handy)
+      await sprungNachStart(plugin);
+      return sprungStatus();
     case 'neuLaden':
       // Plugin-Rahmen neu laden (holt den frischen Bau von der Bruecke), damit nach einem Bau kein Umschalten von Hand noetig ist
       setTimeout(() => (globalThis as any).location?.reload(), 200);
@@ -272,7 +284,10 @@ async function onActivate(plugin: ReactRNPlugin) {
   await einrichten(plugin);
   // Kartenwerkzeug: Aufträge der lokalen Brücke (nur am Rechner; dort nur aktiv, wenn die Brücke läuft).
   // Auf Mobilgeräten gar nicht erst nach der Brücke fragen (spart Akku und Netz).
-  if (!(await aufMobilgeraet(plugin))) schleife(plugin);
+  // Auf dem Handy statt dessen: einen in der Lernzentrale gemerkten Sprung in die Abfrage ausführen
+  // (die RemNote-App verwirft den Link, wenn sie durch ihn erst startet).
+  if (await aufMobilgeraet(plugin)) sprungNachStart(plugin);
+  else schleife(plugin);
 }
 
 async function onDeactivate(_: ReactRNPlugin) {
