@@ -4,7 +4,7 @@
   "name": "RemNote-Karten TBW",
   "author": "RemNote-Karten",
   "repoUrl": "https://github.com/mykriddler/remnote-karten-tbw",
-  "version": { "major": 0, "minor": 3, "patch": 5 },
+  "version": { "major": 0, "minor": 3, "patch": 6 },
   "unlisted": true,
   "theme": [],
   "enableOnMobile": true,

@@ -17,6 +17,12 @@ let wiederholtNach429 = false;
 let laeuft = false;
 let letzterStatus = 'noch nicht gesendet';
 let timer: any = null;
+// Auf dem Handy wartet das Senden, bis der Sprung in die Abfrage erledigt ist (höchstens 70 s), damit das
+// aufwendige Zählen die Befehle an RemNote nicht ausbremst (0.3.6).
+let vorSenden: Promise<unknown> = Promise.resolve();
+export function sendenAbwarten(p: Promise<unknown>) {
+  vorSenden = p;
+}
 
 /**
  * Format des Endpunkts /api/remnote/sync:
@@ -293,7 +299,10 @@ export async function sendeJetzt(plugin: ReactRNPlugin, anlass: string): Promise
   }
   laeuft = true;
   try {
-    const url = ((await plugin.settings.getSetting<string>(EINSTELLUNG_URL)) ?? '').trim();
+    try {
+      await Promise.race([vorSenden, new Promise((r) => setTimeout(r, 70000))]);
+    } catch (_) {}
+    const url =((await plugin.settings.getSetting<string>(EINSTELLUNG_URL)) ?? '').trim();
     const token = ((await plugin.settings.getSetting<string>(EINSTELLUNG_TOKEN)) ?? '').trim();
     if (!url || !token) {
       letzterStatus = 'nicht eingerichtet (Adresse oder Token fehlt in den Plugin-Einstellungen)';
